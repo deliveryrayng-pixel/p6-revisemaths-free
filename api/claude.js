@@ -1,6 +1,6 @@
-// api/claude.js — Vercel Serverless Function (Node.js runtime)
-// Proxies requests from the browser to Anthropic's API
-// API key stays on the server — never exposed to students
+// api/claude.js — Vercel Serverless Function
+// Uses OpenRouter API (free tier available)
+// Get free API key from: openrouter.ai/keys
 
 export default async function handler(req, res) {
   // ── CORS ────────────────────────────────────────────────────────────────────
@@ -8,17 +8,8 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") {
-    return res.status(204).end();
-  }
-
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
-
-  // ── RATE LIMITING (simple) ───────────────────────────────────────────────────
-  // Vercel serverless functions are stateless so we can't do persistent rate
-  // limiting here — use Vercel's built-in rate limiting in the dashboard instead
+  if (req.method === "OPTIONS") return res.status(204).end();
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   // ── PARSE BODY ───────────────────────────────────────────────────────────────
   const { messages, system, max_tokens } = req.body || {};
@@ -27,39 +18,50 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Invalid messages array" });
   }
 
-  // Cap max_tokens to prevent abuse
   const safeMaxTokens = Math.min(max_tokens || 1000, 1000);
 
   // ── CHECK API KEY ────────────────────────────────────────────────────────────
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     return res.status(500).json({
-      error: "API key not configured. Add ANTHROPIC_API_KEY to Vercel environment variables."
+      error: "API key not configured. Add OPENROUTER_API_KEY to Vercel environment variables."
     });
   }
 
-  // ── CALL ANTHROPIC ────────────────────────────────────────────────────────────
+  // ── BUILD MESSAGES (OpenRouter uses OpenAI format) ──────────────────────────
+  const openRouterMessages = [];
+
+  // Add system message if present
+  if (system) {
+    openRouterMessages.push({ role: "system", content: system });
+  }
+
+  // Add conversation messages
+  openRouterMessages.push(...messages);
+
+  // ── CALL OPENROUTER ──────────────────────────────────────────────────────────
   try {
-    const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
+        "Authorization": `Bearer ${apiKey}`,
+        "HTTP-Referer": "https://p6-revisemaths-free.vercel.app",
+        "X-Title": "P6 Maths Prep",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
+        // Free models on OpenRouter — picks best available free one
+        model: "meta-llama/llama-3.1-8b-instruct:free",
         max_tokens: safeMaxTokens,
         stream: true,
-        system: system || "",
-        messages,
+        messages: openRouterMessages,
       }),
     });
 
-    if (!anthropicRes.ok) {
-      const errText = await anthropicRes.text();
-      return res.status(anthropicRes.status).json({
-        error: `Anthropic API error: ${anthropicRes.status} — ${errText}`
+    if (!response.ok) {
+      const errText = await response.text();
+      return res.status(response.status).json({
+        error: `OpenRouter API error: ${response.status} — ${errText}`
       });
     }
 
@@ -68,8 +70,7 @@ export default async function handler(req, res) {
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("X-Accel-Buffering", "no");
 
-    // Pipe the stream directly to the response
-    const reader = anthropicRes.body.getReader();
+    const reader = response.body.getReader();
     const decoder = new TextDecoder();
 
     while (true) {
@@ -81,9 +82,9 @@ export default async function handler(req, res) {
     res.end();
 
   } catch (err) {
-    console.error("API proxy error:", err);
+    console.error("OpenRouter proxy error:", err);
     return res.status(500).json({
-      error: "Failed to reach Anthropic API: " + err.message
+      error: "Failed to reach OpenRouter API: " + err.message
     });
   }
 }

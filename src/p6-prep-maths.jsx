@@ -957,7 +957,6 @@ function AiTutor({ question, correctAnswer, studentAnswer, working, topic, topic
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-6",
           max_tokens: 1000,
           stream: true,
           system: `You are a P6 Maths tutor. You only discuss this specific maths question and nothing else.
@@ -993,8 +992,17 @@ Strict rules:
           if (data === "[DONE]") continue;
           try {
             const json = JSON.parse(data);
+            // Handle both Anthropic and OpenAI/OpenRouter SSE formats
+            let text = "";
             if (json.type === "content_block_delta" && json.delta?.text) {
-              full += json.delta.text;
+              // Anthropic format
+              text = json.delta.text;
+            } else if (json.choices?.[0]?.delta?.content) {
+              // OpenAI/OpenRouter format
+              text = json.choices[0].delta.content;
+            }
+            if (text) {
+              full += text;
               onChunk(full);
             }
           } catch {}
